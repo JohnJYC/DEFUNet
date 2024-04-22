@@ -38,23 +38,47 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
+# class DEFDown(nn.Module):
+#     """Downscaling with maxpool then deformable conv"""
+#     def __init__(self, in_channels, out_channels):
+#         super(DEFDown, self).__init__()
+#         self.maxpool = nn.MaxPool2d(2)
+#         # 添加生成offset的卷积层
+#         self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
+#         self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
+#
+#     def forward(self, x):
+#         x = self.maxpool(x)
+#         # 生成offset
+#         offset = self.offset_conv(x)
+#         # 将x和offset传递给DeformConv2D层
+#         x = self.deform_conv(x, offset)
+#         return x
 class DEFDown(nn.Module):
     """Downscaling with maxpool then deformable conv"""
+    # def __init__(self, in_channels, out_channels):
+    #     super(DEFDown, self).__init__()
+    #     self.maxpool = nn.MaxPool2d(2)
+    #     # 添加生成offset的卷积层
+    #     self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
+    #     self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
+    #
+    # def forward(self, x):
+    #     x = self.maxpool(x)
+    #     # 生成offset
+    #     offset = self.offset_conv(x)
+    #     # 将x和offset传递给DeformConv2D层
+    #     x = self.deform_conv(x, offset)
+    #     return x
     def __init__(self, in_channels, out_channels):
-        super(DEFDown, self).__init__()
-        self.maxpool = nn.MaxPool2d(2)
-        # 添加生成offset的卷积层
-        self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
-        self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, out_channels)
+        )
 
     def forward(self, x):
-        x = self.maxpool(x)
-        # 生成offset
-        offset = self.offset_conv(x)
-        # 将x和offset传递给DeformConv2D层
-        x = self.deform_conv(x, offset)
-        return x
-
+        return self.maxpool_conv(x)
 class Up(nn.Module):
     """Upscaling then double conv"""
 

@@ -38,72 +38,34 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-class DEFDown(nn.Module):
-    """Downscaling with maxpool then deformable conv"""
-    # def __init__(self, in_channels, out_channels):
-    #     super(DEFDown, self).__init__()
-    #     self.maxpool = nn.MaxPool2d(2)
-    #     # 添加生成offset的卷积层
-    #     self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
-    #     self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
-    #
-    # def forward(self, x):
-    #     x = self.maxpool(x)
-    #     # 生成offset
-    #     offset = self.offset_conv(x)
-    #     # 将x和offset传递给DeformConv2D层
-    #     x = self.deform_conv(x, offset)
-    #     return x
 
-
-    # def __init__(self, in_channels, out_channels):
-    #     super().__init__()
-    #     self.maxpool_conv = nn.Sequential(
-    #         nn.MaxPool2d(2),
-    #         DoubleConv(in_channels, out_channels)
-    #     )
-    #
-    # def forward(self, x):
-    #     return self.maxpool_conv(x)
-    """Downscaling with maxpool, dropout, residual connection and DeformConv"""
-
-    def __init__(self, in_channels, out_channels, dropout_ratio=0.2):
+class Swish(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.maxpool = nn.MaxPool2d(2)
-        self.dropout = nn.Dropout2d(dropout_ratio)
-
-        # First deform conv branch
-        self.offsets_conv1 = nn.Conv2d(in_channels, 18, kernel_size=3, padding=1)
-        self.conv1 = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels)
-        self.relu1 = nn.ReLU(inplace=True)
-
-        # Second deform conv branch (with residual connection)
-        self.offsets_conv2 = nn.Conv2d(out_channels, 18, kernel_size=3, padding=1)
-        self.conv2 = DeformConv2D(out_channels, out_channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
-        shortcut = x  # Store input for residual connection
+        return x * torch.sigmoid(x)
 
+
+class DEFDown(nn.Module):
+    """Downscaling with maxpool then deformable conv"""
+
+    def __init__(self, in_channels, out_channels):
+        super(DEFDown, self).__init__()
+        self.maxpool = nn.MaxPool2d(2)
+        # 添加生成offset的卷积层
+        self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
+        self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
+
+    def forward(self, x):
         x = self.maxpool(x)
-        x = self.dropout(x)  # Add dropout for regularization
-
-        offsets1 = self.offsets_conv1(x)
-        x = self.conv1(x, offsets1)
-        x = self.bn1(x)
-        x = self.relu1(x)
-
-        offsets2 = self.offsets_conv2(x)
-        residual = x  # Store output before second DeformConv for residual
-
-        x = self.conv2(x, offsets2)
-        x = self.bn2(x)
-
-        # Add residual connection
-        x = x + residual
-
+        # 生成offset
+        offset = self.offset_conv(x)
+        # 将x和offset传递给DeformConv2D层
+        x = self.deform_conv(x, offset)
         return x
+
+
 class Up(nn.Module):
     """Upscaling then double conv"""
 
@@ -141,10 +103,13 @@ class OutConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
+
 from torch.autograd import Variable, Function
 import torch
 from torch import nn
 import numpy as np
+
+
 class DeformConv2D(nn.Module):
     def __init__(self, inc, outc, kernel_size=3, padding=1, bias=None):
         super(DeformConv2D, self).__init__()
@@ -284,8 +249,10 @@ class DeformConv2D(nn.Module):
         x_offset = torch.cat([x_offset[..., s:s+ks].contiguous().view(b, c, h, w*ks) for s in range(0, N, ks)], dim=-1)
         x_offset = x_offset.contiguous().view(b, c, h*ks, w*ks)
         return x_offset
+
+
 # class DeformConv2d(nn.Module):
-#     def __init__(self, inc, outc, kernel_size=3, padding=1, stride=1, bias=None, modulation=False):
+#     def __init__(self, inc, outc, kernel_size=3, padding=1, stride=1, bias=None, modulation=True):
 #         """
 #         Args:
 #             modulation (bool, optional): If True, Modulated Defomable Convolution (Deformable ConvNets v2).
