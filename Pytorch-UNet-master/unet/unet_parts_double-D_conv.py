@@ -61,13 +61,13 @@ class Down(nn.Module):
 
         # First deform conv branch
         self.offsets_conv1 = nn.Conv2d(in_channels, 18, kernel_size=3, padding=1)
-        self.conv1 = DeformConv2d(in_channels, out_channels // 2, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(out_channels // 2)
+        self.conv1 = DeformConv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu1 = nn.ReLU(inplace=True)
 
         # Second deform conv branch (with residual connection)
-        self.offsets_conv2 = nn.Conv2d(out_channels // 2, 18, kernel_size=3, padding=1)
-        self.conv2 = DeformConv2d(out_channels // 2, out_channels, kernel_size=3, padding=1)
+        self.offsets_conv2 = nn.Conv2d(out_channels, 18, kernel_size=3, padding=1)
+        self.conv2 = DeformConv2d(out_channels, out_channels, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(out_channels)
 
     def forward(self, x):
@@ -82,14 +82,15 @@ class Down(nn.Module):
         x = self.relu1(x)
 
         offsets2 = self.offsets_conv2(x)
+        residual = x  # Store output before second DeformConv for residual
+
         x = self.conv2(x, offsets2)
         x = self.bn2(x)
 
         # Add residual connection
-        x = x + shortcut
+        x = x + residual
 
         return x
-
 class Up(nn.Module):
     """Upscaling then double conv"""
 

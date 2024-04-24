@@ -38,33 +38,51 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
-
-class Swish(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return x * torch.sigmoid(x)
-
-
 class DEFDown(nn.Module):
-    """Downscaling with maxpool then deformable conv"""
-
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dropout_rate=0.3):
         super(DEFDown, self).__init__()
         self.maxpool = nn.MaxPool2d(2)
+
+
         # 添加生成offset的卷积层
         self.offset_conv = nn.Conv2d(in_channels, 2 * 3 * 3, kernel_size=3, padding=1)
+
+
+        # Deformable Conv + Dropout
         self.deform_conv = DeformConv2D(in_channels, out_channels, kernel_size=3, padding=1)
+        self.dropout = nn.Dropout2d(dropout_rate)
+
+
+        # 残差连接
+        self.residual_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)  # 1x1卷积调整通道数
+
 
     def forward(self, x):
+        # 先应用MaxPooling
         x = self.maxpool(x)
+
+
         # 生成offset
         offset = self.offset_conv(x)
-        # 将x和offset传递给DeformConv2D层
-        x = self.deform_conv(x, offset)
-        return x
 
+
+        # 通过deformable convolution卷积
+        x_deform = self.deform_conv(x, offset)
+
+
+        # 应用dropout
+        x_deform = self.dropout(x_deform)
+
+
+        # 残差连接
+        residual = self.residual_conv(x)
+
+
+        # 加入残差和ReLU激活函数
+        x = F.relu(x_deform + residual)
+
+
+        return x
 
 class Up(nn.Module):
     """Upscaling then double conv"""
