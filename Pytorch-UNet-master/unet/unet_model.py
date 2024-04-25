@@ -1,13 +1,12 @@
-""" Full assembly of the parts to form the complete network """
-
 from .unet_parts import *
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=True):
+    def __init__(self, n_channels, n_classes, dropout_prob=0.2, bilinear=True):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
+        self.dropout_prob = dropout_prob
         self.bilinear = bilinear
 
         self.inc = (DoubleConv(n_channels, 64))
@@ -16,10 +15,19 @@ class UNet(nn.Module):
         self.down3 = (DEFDown(256, 512))
         factor = 2 if bilinear else 1
         self.down4 = (Down(512, 1024 // factor))
+
         self.up1 = (Up(1024, 512 // factor, bilinear))
+        self.dropout1 = nn.Dropout2d(dropout_prob)  # Add dropout after each Up block
+
         self.up2 = (Up(512, 256 // factor, bilinear))
+        self.dropout2 = nn.Dropout2d(dropout_prob)
+
         self.up3 = (Up(256, 128 // factor, bilinear))
+        self.dropout3 = nn.Dropout2d(dropout_prob)
+
         self.up4 = (Up(128, 64, bilinear))
+        self.dropout4 = nn.Dropout2d(dropout_prob)
+
         self.outc = (OutConv(64, n_classes))
 
     def forward(self, x):
@@ -29,9 +37,17 @@ class UNet(nn.Module):
         x4 = self.down3(x3)
         x5 = self.down4(x4)
         x = self.up1(x5, x4)
+        x = self.dropout1(x)  # Apply dropout after Up1
+
         x = self.up2(x, x3)
+        x = self.dropout2(x)  # Apply dropout after Up2
+
         x = self.up3(x, x2)
+        x = self.dropout3(x)  # Apply dropout after Up3
+
         x = self.up4(x, x1)
+        x = self.dropout4(x)  # Apply dropout after Up4
+
         logits = self.outc(x)
         return logits
 
