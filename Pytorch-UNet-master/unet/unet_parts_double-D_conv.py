@@ -54,7 +54,7 @@ class Down(nn.Module):
     #     return x
     """Downscaling with maxpool, dropout, residual connection and DeformConv"""
 
-    def __init__(self, in_channels, out_channels, dropout_ratio=0.2):
+    def __init__(self, in_channels, out_channels, dropout_ratio=0.1):
         super().__init__()
         self.maxpool = nn.MaxPool2d(2)
         self.dropout = nn.Dropout2d(dropout_ratio)
