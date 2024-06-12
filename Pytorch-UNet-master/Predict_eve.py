@@ -1,13 +1,15 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
 import os
 import numpy as np
+from tqdm import tqdm
 from sklearn.metrics import jaccard_score, f1_score
 from unet.unet_parts import *
+from utils.dice_score import multiclass_dice_coeff, dice_coeff
 
-# 定义你的模型结构（与训练时使用的结构相同）
 class YourModel(nn.Module):
     def __init__(self, n_channels, n_classes, dropout_prob=0.2, bilinear=True):
         super(YourModel, self).__init__()
@@ -16,18 +18,18 @@ class YourModel(nn.Module):
         self.dropout_prob = dropout_prob
         self.bilinear = bilinear
 
-        self.inc = (DoubleConv(n_channels, 64))
-        self.down1 = (DEFDown(64, 128))
-        self.down2 = (Down(128, 256))
-        self.down3 = (DEFDown(256, 512))
+        self.inc = DoubleConv(n_channels, 64)
+        self.down1 = DEFDown(64, 128)
+        self.down2 = Down(128, 256)
+        self.down3 = DEFDown(256, 512)
         factor = 2 if bilinear else 1
-        self.down4 = (DEFDown(512, 1024 // factor))
+        self.down4 = DEFDown(512, 1024 // factor)
 
-        self.up1 = (Up(1024, 512 // factor, bilinear))
-        self.up2 = (Up(512, 256 // factor, bilinear))
-        self.up3 = (Up(256, 128 // factor, bilinear))
-        self.up4 = (Up(128, 64, bilinear))
-        self.outc = (OutConv(64, n_classes))
+        self.up1 = Up(1024, 512 // factor, bilinear)
+        self.up2 = Up(512, 256 // factor, bilinear)
+        self.up3 = Up(256, 128 // factor, bilinear)
+        self.up4 = Up(128, 64, bilinear)
+        self.outc = OutConv(64, n_classes)
 
     def forward(self, x):
         x1 = self.inc(x)
@@ -55,11 +57,10 @@ class YourModel(nn.Module):
         self.outc = torch.utils.checkpoint(self.outc)
 
 def load_model(model_path):
-    n_channels = 3  # 输入通道数，例如RGB图像为3
-    n_classes = 1  # 确保与训练时使用的类别数一致
+    n_channels = 3
+    n_classes = 2
     model = YourModel(n_channels, n_classes)
     state_dict = torch.load(model_path, map_location=torch.device('cpu'))
-    # 过滤掉不匹配的键
     model_state_dict = model.state_dict()
     filtered_state_dict = {k: v for k, v in state_dict.items() if k in model_state_dict and model_state_dict[k].shape == v.shape}
     model_state_dict.update(filtered_state_dict)
@@ -70,25 +71,65 @@ def load_model(model_path):
 def preprocess_image(image_path, transform):
     image = Image.open(image_path).convert('RGB')
     image = transform(image)
-    image = image.unsqueeze(0)  # 增加batch维度
+    image = image.unsqueeze(0)
     return image
 
-def calculate_metrics(pred_mask, true_mask):
-    pred_mask = pred_mask.flatten()
-    true_mask = true_mask.flatten()
-    iou = jaccard_score(true_mask, pred_mask, average='binary', zero_division=0)
-    dice = f1_score(true_mask, pred_mask, average='binary', zero_division=0)
-    return iou, dice
-
 def save_prediction(pred_mask, output_path):
-    pred_image = Image.fromarray((pred_mask * 255).astype(np.uint8))  # 将二值mask转换为图像
+    pred_mask = pred_mask.squeeze(0)  # 去掉batch维度
+    print(f"Pred mask after squeeze shape: {pred_mask.shape}")
+    pred_mask = (pred_mask > 0.5).float()  # 二值化
+    print(f"Pred mask after threshold: {pred_mask.unique()}")  # 打印唯一值检查二值化效果
+    pred_mask = pred_mask.cpu().numpy()
+    pred_image = Image.fromarray((pred_mask * 255).astype(np.uint8))  # 转换为uint8图像
     pred_image.save(output_path)
 
+@torch.inference_mode()
+def evaluate(net, dataloader, device, amp):
+    net.eval()
+    num_val_batches = len(dataloader)
+    dice_score = 0
+
+    with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+        for i, batch in enumerate(
+                tqdm(dataloader, total=num_val_batches, desc='Validation round', unit='batch', leave=False)):
+            image, mask_true = batch['image'], batch['mask']
+            image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
+            mask_true = mask_true.to(device=device, dtype=torch.long)
+
+            mask_pred = net(image)
+
+            if net.n_classes == 1:
+                mask_pred = (torch.sigmoid(mask_pred) > 0.5).float()
+                dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
+            else:
+                mask_true = mask_true.squeeze(1)  # 将 [batch_size, 1, height, width] 转换为 [batch_size, height, width]
+
+                if mask_true.dim() == 4 and mask_true.size(1) == 1:
+                    mask_true = mask_true.squeeze(1)  # 去掉维度
+
+                if mask_true.dim() == 3:
+                    mask_true = F.one_hot(mask_true, num_classes=net.n_classes).permute(0, 3, 1, 2).float()
+                else:
+                    raise RuntimeError(f"Unexpected mask_true dimensions: {mask_true.dim()}")
+
+                mask_pred = F.one_hot(mask_pred.argmax(dim=1), num_classes=net.n_classes).permute(0, 3, 1, 2).float()
+                dice_score += multiclass_dice_coeff(mask_pred[:, 1:], mask_true[:, 1:], reduce_batch_first=False)
+
+                # 保存第一个预测结果以进行调试
+                if i == 14:
+                    save_prediction(mask_pred.argmax(dim=1), "output_path_here.png")
+                    save_prediction(mask_true.argmax(dim=1), "true_mask_here.png")
+
+    net.train()
+    return dice_score / max(num_val_batches, 1)
+
 def main():
-    model_path = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/Pytorch-UNet-master/checkpoints/checkpoint_epoch451.pth'
-    original_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/Pytorch-UNet-master/data/imgs'
-    mask_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/Pytorch-UNet-master/data/masks'
+    model_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/Pytorch-UNet-master/checkpoints'
+    original_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/original_images'
+    mask_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/masks'
     output_dir = 'C:/Users/gr0665hh/Desktop/Pytorch-UNet-master/predictions'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    amp = True
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -98,55 +139,44 @@ def main():
         transforms.ToTensor(),
     ])
 
-    model = load_model(model_path)
+    dataset = CustomDataset(original_dir, mask_dir, transform)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
 
-    total_iou = 0
-    total_dice = 0
-    num_images = 0
+    best_dice_score = 0
+    best_model_path = None
 
-    for filename in os.listdir(original_dir):
-        if filename.endswith('.tif'):
-            original_image_path = os.path.join(original_dir, filename)
-            mask_filename = filename.replace('.tif', '_mask.tif')
-            mask_image_path = os.path.join(mask_dir, mask_filename)
-            output_path = os.path.join(output_dir, filename)
+    for model_file in os.listdir(model_dir):
+        model_path = os.path.join(model_dir, model_file)
+        if model_path.endswith('.pth'):
+            model = load_model(model_path).to(device)
+            dice_score = evaluate(model, dataloader, device, amp)
+            print(f'Model: {model_file}, Dice Score: {dice_score:.4f}')
+            if dice_score > best_dice_score:
+                best_dice_score = dice_score
+                best_model_path = model_path
 
-            if not os.path.exists(mask_image_path):
-                print(f"Mask for {filename} does not exist.")
-                continue
+    print(f'Best Model: {best_model_path}, Dice Score: {best_dice_score:.4f}')
 
-            original_image = preprocess_image(original_image_path, transform)
-            true_mask = Image.open(mask_image_path).convert('L')
-            true_mask = true_mask.resize((256, 256))
-            true_mask = np.array(true_mask) // 255
+class CustomDataset(torch.utils.data.Dataset):
+    def __init__(self, img_dir, mask_dir, transform=None):
+        self.img_dir = img_dir
+        self.mask_dir = mask_dir
+        self.transform = transform
+        self.images = [img for img in os.listdir(img_dir) if img.endswith('.tif')]
 
-            with torch.no_grad():
-                output = model(original_image)
-                pred_mask = torch.sigmoid(output).squeeze().cpu().numpy()
-                pred_mask = (pred_mask > 0.5).astype(np.uint8)
+    def __len__(self):
+        return len(self.images)
 
-            true_mask = true_mask.flatten()
-            pred_mask = pred_mask.flatten()
-
-            print(f"True mask shape: {true_mask.shape}, Predicted mask shape: {pred_mask.shape}")
-
-            iou, dice = calculate_metrics(pred_mask, true_mask)
-            total_iou += iou
-            total_dice += dice
-            num_images += 1
-
-            print(f'{filename} - IOU: {iou:.4f}, Dice: {dice:.4f}')
-
-            # 保存预测的图像
-            save_prediction(pred_mask.reshape(256, 256), output_path)
-
-    if num_images > 0:
-        average_iou = total_iou / num_images
-        average_dice = total_dice / num_images
-        print(f'Average IOU: {average_iou:.4f}')
-        print(f'Average Dice: {average_dice:.4f}')
-    else:
-        print("No images found for processing.")
+    def __getitem__(self, idx):
+        img_path = os.path.join(self.img_dir, self.images[idx])
+        mask_path = os.path.join(self.mask_dir, self.images[idx].replace('.tif', '_mask.tif'))
+        image = Image.open(img_path).convert("RGB")
+        mask = Image.open(mask_path).convert("L")
+        if self.transform:
+            image = self.transform(image)
+            mask = self.transform(mask)
+        mask = torch.unsqueeze(mask, 0)
+        return {"image": image, "mask": mask}
 
 if __name__ == '__main__':
     main()

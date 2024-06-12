@@ -2,15 +2,15 @@ import logging
 import numpy as np
 import torch
 from PIL import Image
-from functools import lru_cache
 from functools import partial
 from itertools import repeat
 from multiprocessing import Pool
 from os import listdir
 from os.path import splitext, isfile, join
 from pathlib import Path
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from torchvision import transforms
 
 
 def load_image(filename):
@@ -21,7 +21,6 @@ def load_image(filename):
         return Image.fromarray(torch.load(filename).numpy())
     else:
         return Image.open(filename)
-
 
 def unique_mask_values(idx, mask_dir, mask_suffix):
     mask_file = list(mask_dir.glob(idx + mask_suffix + '.*'))[0]
@@ -34,14 +33,14 @@ def unique_mask_values(idx, mask_dir, mask_suffix):
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
 
-
 class BasicDataset(Dataset):
-    def __init__(self, images_dir: str, mask_dir: str, scale: float = 1.0, mask_suffix: str = ''):
+    def __init__(self, images_dir: str, mask_dir: str, scale: float = 1.0, mask_suffix: str = '', transform=None):
         self.images_dir = Path(images_dir)
         self.mask_dir = Path(mask_dir)
         assert 0 < scale <= 1, 'Scale must be between 0 and 1'
         self.scale = scale
         self.mask_suffix = mask_suffix
+        self.transform = transform
 
         self.ids = [splitext(file)[0] for file in listdir(images_dir) if isfile(join(images_dir, file)) and not file.startswith('.')]
         if not self.ids:
@@ -103,6 +102,13 @@ class BasicDataset(Dataset):
         assert img.size == mask.size, \
             f'Image and mask {name} should be the same size, but are {img.size} and {mask.size}'
 
+        # Convert numpy arrays back to PIL images for augmentation
+        img = Image.fromarray(np.asarray(img))
+        mask = Image.fromarray(np.asarray(mask))
+
+        if self.transform:
+            img = self.transform(img)
+
         img = self.preprocess(self.mask_values, img, self.scale, is_mask=False)
         mask = self.preprocess(self.mask_values, mask, self.scale, is_mask=True)
 
@@ -111,7 +117,6 @@ class BasicDataset(Dataset):
             'mask': torch.as_tensor(mask.copy()).long().contiguous()
         }
 
-
 class CarvanaDataset(BasicDataset):
-    def __init__(self, images_dir, mask_dir, scale=1):
-        super().__init__(images_dir, mask_dir, scale, mask_suffix='_mask')
+    def __init__(self, images_dir, mask_dir, scale=1, transform=None):
+        super().__init__(images_dir, mask_dir, scale, mask_suffix='_mask', transform=transform)

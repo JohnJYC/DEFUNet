@@ -34,15 +34,31 @@ def train_model(
         save_checkpoint: bool = True,
         img_scale: float = 1.0,
         amp: bool = False,
-        weight_decay: float = 1e-8,
+        weight_decay: float = 1e-4,
         momentum: float = 0.999,
         gradient_clipping: float = 1.0,
 ):
-    # 1. Create dataset
+    # # Data augmentation
+    # data_transforms = transforms.Compose([
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.RandomVerticalFlip(),
+    #     transforms.RandomRotation(90),
+    # ])
+    # Data augmentation
+    data_transforms = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomVerticalFlip(),
+        transforms.RandomRotation(90),
+        transforms.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5),
+        transforms.RandomAffine(degrees=30, translate=(0.1, 0.1), scale=(0.8, 1.2), shear=10),
+        transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0))
+    ])
+
+    # Create dataset
     try:
-        dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
+        dataset = CarvanaDataset(dir_img, dir_mask, img_scale, transform=data_transforms)
     except (AssertionError, RuntimeError, IndexError):
-        dataset = BasicDataset(dir_img, dir_mask, img_scale)
+        dataset = BasicDataset(dir_img, dir_mask, img_scale, transform=data_transforms)
 
     # 2. Split into train / validation partitions
     n_val = int(len(dataset) * val_percent)
@@ -73,10 +89,10 @@ def train_model(
         Mixed Precision: {amp}
     ''')
 
-    ## 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for Adam
+    # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for Adam
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
-    grad_scaler = torch.cuda.amp.GradScaler(enabled=amp)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+    grad_scaler = torch.cuda.amp.GradScaler(enabled=True)
     criterion = nn.CrossEntropyLoss() if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
 
@@ -167,9 +183,9 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on original_images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=500, help='Number of epochs')
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=1000, help='Number of epochs')
     parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=1, help='Batch size')
-    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-4,
+    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--scale', '-s', type=float, default=1.0, help='Downscaling factor of the original_images')

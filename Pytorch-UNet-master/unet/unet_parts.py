@@ -38,6 +38,7 @@ class Down(nn.Module):
     def forward(self, x):
         return self.maxpool_conv(x)
 
+
 class DEFDown(nn.Module):
     """Downscaling with maxpool then deformable conv"""
 
@@ -50,13 +51,13 @@ class DEFDown(nn.Module):
 
     def forward(self, x):
         return self.maxpool_conv(x)
+
+
 class Up(nn.Module):
     """Upscaling then double conv"""
 
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
-
-        # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
@@ -66,15 +67,11 @@ class Up(nn.Module):
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
-        # input is CHW
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
-        # if you have padding issues, see
-        # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
-        # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
         x = torch.cat([x2, x1], dim=1)
         return self.conv(x)
 
@@ -86,6 +83,47 @@ class OutConv(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+
+
+def __init__(self, inc, outc, kernel_size=3, padding=1, stride=1, dilation=2, bias=None, modulation=False,
+             adaptive_d=True):
+    """
+    Args:
+        modulation (bool, optional): If True, Modulated Defomable Convolution (Deformable ConvNets v2).
+    """
+    super(DeformConv2d, self).__init__()
+    self.outc = outc
+    self.kernel_size = kernel_size
+    self.padding = padding
+    self.stride = stride
+    self.dilation = dilation
+    self.adaptive_d = adaptive_d
+
+    self.zero_padding = nn.ZeroPad2d(padding)
+    self.conv = nn.Conv2d(inc, outc, kernel_size=kernel_size, stride=kernel_size, bias=bias)
+    # self.conv_weight_m = torch.Tensor([outc,inc,kernel_size,kernel_size], requires_grad=False).cuda()
+    # self.s_dilation= Variable(torch.ones([int((self.kernel_size-1)/2)]).cuda(),requires_grad=True).floor()
+
+    self.p_conv = nn.Conv2d(inc, 2 * kernel_size * kernel_size, kernel_size=3, padding=1, stride=stride)
+    nn.init.constant_(self.p_conv.weight, 0)
+    self.p_conv.register_backward_hook(self._set_lr)
+
+    self.modulation = modulation
+    if modulation:
+        self.m_conv = nn.Conv2d(inc, kernel_size * kernel_size, kernel_size=3, padding=1, stride=stride)
+        nn.init.constant_(self.m_conv.weight, 0.5)
+        self.m_conv.register_backward_hook(self._set_lr)
+
+    if self.adaptive_d:
+        self.ad_conv = nn.Conv2d(inc, kernel_size, kernel_size=3, padding=1, stride=stride)
+        nn.init.constant_(self.ad_conv.weight, 1)
+        self.ad_conv.register_backward_hook(self._set_lr)
+
+
+@staticmethod
+def _set_lr(module, grad_input, grad_output):
+    grad_input = (grad_input[i] * 0.1 for i in range(len(grad_input)))
+    grad_output = (grad_output[i] * 0.1 for i in range(len(grad_output)))
 
 
 class DeformConv2d(nn.Module):
